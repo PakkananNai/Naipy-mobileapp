@@ -57,3 +57,6 @@ app.*.map.json
 # Generated release packages
 *.apk
 *.aab
+
+# Local rollback copies
+*.bak
