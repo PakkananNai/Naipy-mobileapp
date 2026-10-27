@@ -178,7 +178,7 @@ class _SettingsPage extends StatelessWidget {
   }
 }
 
-const _appVersion = '1.0.0';
+const _appVersion = '1.0.2';
 const _githubLatestReleaseApi =
     'https://api.github.com/repos/PakkananNai/Naipy-mobileapp/releases/latest';
 const _githubReleasesUrl =
