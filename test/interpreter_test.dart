@@ -1,0 +1,455 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:code_explainer/interpreter.dart';
+
+void main() {
+  test('captures each assignment and print output for backward navigation', () {
+    final trace =
+        MiniPython().run('x = 10\ny = 20\ntotal = x + y\nprint(total)');
+    expect(trace.error, isNull);
+    expect(trace.steps, hasLength(4));
+    expect(trace.steps[0].variables, {'x': 10});
+    expect(trace.steps[2].variables['total'], 30);
+    expect(trace.steps[2].output, isEmpty);
+    expect(trace.steps[3].output, '30\n');
+  });
+
+  test('executes a condition and bounded range loop', () {
+    final trace = MiniPython().run(
+        'total = 0\nfor i in range(1, 4):\n    total = total + i\nif total == 6:\n    print("ok")');
+    expect(trace.error, isNull);
+    expect(trace.steps.last.output, 'ok\n');
+  });
+
+  test('explains sum inputs and tracks list mutations', () {
+    final sum = MiniPython().run('numbers = [2, 4, 6]\ntotal = sum(numbers)');
+    expect(sum.error, isNull);
+    expect(sum.steps.last.variables['total'], 12);
+    expect(sum.steps.last.expression, 'sum(numbers)');
+
+    final append = MiniPython().run('numbers = [2, 4]\nnumbers.append(6)');
+    expect(append.error, isNull);
+    expect(append.steps.last.kind, 'listMethod');
+    expect(append.steps.last.variableChange!.before, [2, 4]);
+    expect(append.steps.last.variableChange!.after, [2, 4, 6]);
+
+    final sort = MiniPython().run('numbers = [4, 2, 3]\nnumbers.sort()');
+    expect(sort.error, isNull);
+    expect(sort.steps.last.variableChange!.after, [2, 3, 4]);
+  });
+
+  test('supports common list mutation and query methods', () {
+    final trace = MiniPython().run(
+      'items = [3, 1, 3]\nitems.insert(1, 2)\nitems.extend([5, 6])\nitems.remove(3)\nitems.reverse()\nitems.sort()\nitems.pop()\nitems.clear()',
+    );
+    expect(trace.error, isNull);
+    expect(trace.steps.where((s) => s.kind == 'listMethod'), hasLength(7));
+    expect(trace.steps.last.variableChange!.after, isEmpty);
+
+    final queries = MiniPython().run(
+      'items = [2, 4, 2]\nprint(items.count(2))\nprint(items.index(4))\nprint(len(items))\nprint(sum(items))',
+    );
+    expect(queries.error, isNull);
+    expect(queries.steps.last.output, '2\n1\n3\n8\n');
+  });
+
+  test('supports print sep and end options', () {
+    final trace = MiniPython().run(
+      "print('a', 'b', sep='-')\nprint('hi', end=' ')\nprint('there')",
+    );
+    expect(trace.error, isNull);
+    expect(trace.steps.last.output, 'a-b\nhi there\n');
+    expect(trace.steps[1].outputAdded, 'hi ');
+  });
+
+  test('supports f-strings with variables and expressions', () {
+    final trace = MiniPython().run(
+      'name = "Nai"\nscore = 40 + 2\nprint(f"Hello {name}, score {score}")',
+    );
+    expect(trace.error, isNull);
+    expect(trace.steps.last.output, 'Hello Nai, score 42\n');
+  });
+
+  test('supports common string methods', () {
+    final trace = MiniPython().run(
+      "text = '  Hello World  '\n"
+      "print(text.strip())\n"
+      "print(text.upper())\n"
+      "print(text.lower())\n"
+      "print(text.replace('World', 'Nai'))\n"
+      "print(text.split())\n"
+      "print(text.startswith('  He'))\n"
+      "print(text.count('l'))",
+    );
+    expect(trace.error, isNull);
+    expect(
+        trace.steps.last.output,
+        "Hello World\n  HELLO WORLD  \n  hello world  \n"
+        "  Hello Nai  \n[Hello, World]\ntrue\n3\n");
+  });
+
+  test('reports unsupported syntax and division by zero', () {
+    expect(MiniPython().run('while True:\n    pass').errorLine, 1);
+    final trace = MiniPython().run('answer = 4 / 0');
+    expect(trace.error, contains('Division by zero'));
+    expect(trace.errorLine, 1);
+  });
+
+  test('records assignment operations, overwrites, and only appended output',
+      () {
+    final trace =
+        MiniPython().run('score = 10\nscore = score + 1\nprint(score)');
+    expect(trace.error, isNull);
+    expect(trace.steps[0].variableChange!.existed, isFalse);
+    expect(trace.steps[1].variableChange!.before, 10);
+    expect(trace.steps[1].operations.single.left, 10);
+    expect(trace.steps[1].operations.single.right, 1);
+    expect(trace.steps[1].operations.single.result, 11);
+    expect(trace.steps[2].variableChange, isNull);
+    expect(trace.steps[2].outputAdded, '11\n');
+  });
+
+  test('records condition result and chosen branch', () {
+    final trace = MiniPython().run(
+        'score = 9\nif score >= 10:\n    result = True\nelse:\n    result = False');
+    final condition = trace.steps[1];
+    expect(condition.conditionValue, isFalse);
+    expect(condition.conditionResult, isFalse);
+    expect(condition.operations.single.left, 9);
+    expect(condition.operations.single.operator, '>=');
+    expect(condition.operations.single.right, 10);
+    expect(condition.branch, 'else');
+    expect(trace.steps.last.variables['result'], isFalse);
+  });
+
+  test('supports chained if elif else conditions', () {
+    final trace = MiniPython().run(
+      'score = 82\n'
+      'if score >= 90:\n'
+      '    grade = "A"\n'
+      'elif score >= 80:\n'
+      '    grade = "B"\n'
+      'elif score >= 70:\n'
+      '    grade = "C"\n'
+      'elif score >= 60:\n'
+      '    grade = "D"\n'
+      'else:\n'
+      '    grade = "F"\n'
+      'print(f"Score: {score}, Grade: {grade}")',
+    );
+
+    expect(trace.error, isNull);
+    expect(
+      trace.steps.any((step) =>
+          step.variableChange?.name == 'grade' &&
+          step.variables['grade'] == 'B'),
+      isTrue,
+      reason: 'The matching elif body must run and assign grade.',
+    );
+    expect(trace.steps.last.variables['grade'], 'B');
+    expect(trace.steps.last.output, 'Score: 82, Grade: B\n');
+    expect(trace.steps.where((step) => step.kind == 'condition'), hasLength(2));
+  });
+
+  test('selects a later elif and skips subsequent branches', () {
+    final trace = MiniPython().run(
+      'score = 72\n'
+      'if score >= 90:\n'
+      '    grade = "A"\n'
+      'elif score >= 80:\n'
+      '    grade = "B"\n'
+      'elif score >= 70:\n'
+      '    grade = "C"\n'
+      'elif score >= 60:\n'
+      '    grade = "D"\n'
+      'else:\n'
+      '    grade = "F"\n'
+      'print(grade)',
+    );
+
+    expect(trace.error, isNull);
+    expect(trace.steps.last.variables['grade'], 'C');
+    expect(trace.steps.last.output, 'C\n');
+    expect(trace.steps.where((step) => step.kind == 'condition'), hasLength(3));
+  });
+
+  test('supports nested if elif else chains', () {
+    final trace = MiniPython().run(
+      'score = 82\n'
+      'if score >= 80:\n'
+      '    if score >= 90:\n'
+      '        grade = "A"\n'
+      '    elif score >= 80:\n'
+      '        grade = "B"\n'
+      '    else:\n'
+      '        grade = "C"\n'
+      'else:\n'
+      '    grade = "F"\n'
+      'print(grade)',
+    );
+
+    expect(trace.error, isNull);
+    expect(trace.steps.last.variables['grade'], 'B');
+    expect(trace.steps.last.output, 'B\n');
+    expect(trace.steps.where((step) => step.kind == 'condition'), hasLength(3));
+  });
+
+  test('selects else when every if and elif condition is false', () {
+    final trace = MiniPython().run(
+      'score = 42\n'
+      'if score >= 90:\n'
+      '    grade = "A"\n'
+      'elif score >= 80:\n'
+      '    grade = "B"\n'
+      'else:\n'
+      '    grade = "F"',
+    );
+
+    expect(trace.error, isNull);
+    expect(trace.steps.last.variables['grade'], 'F');
+  });
+
+  test('supports the grade example with two-space indentation', () {
+    final trace = MiniPython().run(
+      'score = 82\n'
+      '\n'
+      'if score >= 90:\n'
+      '  grade = "A"\n'
+      'elif score >= 80:\n'
+      '  grade = "B"\n'
+      'elif score >= 70:\n'
+      '  grade = "C"\n'
+      'elif score >= 60:\n'
+      '  grade = "D"\n'
+      'else:\n'
+      '  grade = "F"\n'
+      '\n'
+      'print(f"Score: {score}, Grade: {grade}")',
+    );
+
+    expect(trace.error, isNull);
+    expect(trace.steps.last.variables['grade'], 'B');
+    expect(trace.steps.last.output, 'Score: 82, Grade: B\n');
+  });
+
+  test('runs student score analysis with tuple unpacking and +=', () {
+    const source = 'students = [\n'
+        '    ("65001", "Somchai", 75, 80),\n'
+        '    ("65002", "Suda", 82, 90),\n'
+        '    ("65003", "Anan", 55, 60),\n'
+        '    ("65004", "Malee", 68, 72),\n'
+        '    ("65005", "Prasert", 90, 85)\n'
+        ']\n'
+        'print("คะแนนรวมของนักศึกษา:")\n'
+        'for code, name, midterm, final in students:\n'
+        '    total_score = midterm + final\n'
+        '    print(f"{code} {name}: {total_score} คะแนน")\n'
+        'total = 0\n'
+        'for code, name, midterm, final in students:\n'
+        '    total += midterm + final\n'
+        'average = total / len(students)\n'
+        'print("คะแนนรวมเฉลี่ย:", average)\n'
+        'max_name = ""\n'
+        'max_score = 0\n'
+        'for code, name, midterm, final in students:\n'
+        '    total_score = midterm + final\n'
+        '    if total_score > max_score:\n'
+        '        max_score = total_score\n'
+        '        max_name = name\n'
+        'print(f"นักศึกษาที่ได้คะแนนรวมสูงสุด: {max_name} คะแนนรวม {max_score} คะแนน")\n'
+        'print("เกรดของนักศึกษา:")\n'
+        'grade_a = []\n'
+        'for code, name, midterm, final in students:\n'
+        '    avg_score = (midterm + final) / 2\n'
+        '    if avg_score >= 80:\n'
+        '        grade = "A"\n'
+        '    elif avg_score >= 70:\n'
+        '        grade = "B"\n'
+        '    elif avg_score >= 60:\n'
+        '        grade = "C"\n'
+        '    elif avg_score >= 50:\n'
+        '        grade = "D"\n'
+        '    else:\n'
+        '        grade = "F"\n'
+        '    if grade == "A":\n'
+        '        grade_a.append(name)\n'
+        'print("นักศึกษาที่ได้เกรด A:", grade_a)';
+    final trace = MiniPython().run(source);
+    expect(trace.error, isNull, reason: trace.error);
+    expect(trace.steps.last.output, contains('คะแนนรวมเฉลี่ย: 151.4'));
+    expect(trace.steps.last.output,
+        contains('นักศึกษาที่ได้คะแนนรวมสูงสุด: Prasert คะแนนรวม 175 คะแนน'));
+    expect(trace.steps.last.output,
+        endsWith('นักศึกษาที่ได้เกรด A: [Suda, Prasert]\n'));
+  });
+
+  test('input() requests values and resumes with supplied answers', () {
+    const source = 'name = input("Your name: ")\n'
+        'age = int(input("Age: "))\n'
+        'print(f"{name} is {age}")';
+    final first = MiniPython().run(source);
+    expect(first.inputRequest?.prompt, 'Your name: ');
+    expect(first.inputRequest?.index, 0);
+
+    final second = MiniPython().run(source, inputs: ['Nai']);
+    expect(second.inputRequest?.prompt, 'Age: ');
+    expect(second.inputRequest?.index, 1);
+
+    final finished = MiniPython().run(source, inputs: ['Nai', '19']);
+    expect(finished.error, isNull);
+    expect(finished.inputRequest, isNull);
+    expect(finished.steps.last.output, 'Nai is 19\n');
+  });
+
+  test('supports while loops, break, and continue', () {
+    final trace = MiniPython().run(
+      'count = 0\n'
+      'while count < 4:\n'
+      '    count += 1\n'
+      '    if count == 2:\n'
+      '        continue\n'
+      '    if count == 4:\n'
+      '        break\n'
+      '    print(count)\n'
+      'print("done")',
+    );
+    expect(trace.error, isNull, reason: trace.error);
+    expect(trace.steps.last.output, '1\n3\ndone\n');
+  });
+
+  test('supports try except and finally blocks', () {
+    final trace = MiniPython().run(
+      'try:\n'
+      '    age = int("not a number")\n'
+      'except ValueError:\n'
+      '    print("invalid input")\n'
+      'finally:\n'
+      '    print("cleanup")',
+    );
+    expect(trace.error, isNull, reason: trace.error);
+    expect(trace.steps.last.output, 'invalid input\ncleanup\n');
+
+    final withoutError = MiniPython().run(
+      'try:\n'
+      '    print("work")\n'
+      'except ValueError:\n'
+      '    print("not reached")\n'
+      'finally:\n'
+      '    print("done")',
+    );
+    expect(withoutError.error, isNull, reason: withoutError.error);
+    expect(withoutError.steps.last.output, 'work\ndone\n');
+  });
+
+  test('raises typed exceptions that matching except can handle', () {
+    final trace = MiniPython().run(
+      'try:\n'
+      '    raise ValueError("bad value")\n'
+      'except ValueError as error:\n'
+      '    print(error)',
+    );
+    expect(trace.error, isNull, reason: trace.error);
+    expect(trace.steps.last.output, 'bad value\n');
+    expect(trace.steps.last.variables['error'], 'bad value');
+  });
+
+  test('records loop iteration values and empty ranges', () {
+    final trace = MiniPython().run('for i in range(1, 4):\n    pass');
+    final iterations = trace.steps.where((s) => s.kind == 'loop').toList();
+    expect(iterations.map((s) => s.iteration), [1, 2, 3]);
+    expect(iterations.map((s) => s.variableChange!.after), [1, 2, 3]);
+    expect(iterations.last.finalIteration, isTrue);
+    final empty = MiniPython().run('for i in range(3, 1):\n    pass');
+    expect(empty.steps.single.kind, 'loopEmpty');
+    expect(empty.steps.single.iterationCount, 0);
+  });
+
+  test('supports def, parameters, return, and nested function calls', () {
+    final trace = MiniPython().run(
+      'def double(n):\n'
+      '    return n * 2\n'
+      'def add(a, b):\n'
+      '    return a + b\n'
+      'answer = add(double(3), double(4))\n'
+      'print(answer)',
+    );
+    expect(trace.error, isNull, reason: trace.error);
+    expect(trace.steps.last.output, '14\n');
+    expect(trace.steps.last.variables['answer'], 14);
+    expect(trace.steps.where((step) => step.kind == 'functionDefinition'),
+        hasLength(2));
+    expect(
+        trace.steps.where((step) => step.kind == 'functionCall'), hasLength(3));
+
+    final example = MiniPython().run(
+      'def calculate_total(midterm, final):\n'
+      '    total = midterm + final\n'
+      '    return total\n'
+      'score = calculate_total(75, 80)\n'
+      'print(score)',
+    );
+    expect(example.error, isNull, reason: example.error);
+    final definition =
+        example.steps.firstWhere((step) => step.kind == 'functionDefinition');
+    expect(definition.functionParameters, ['midterm', 'final']);
+    final call =
+        example.steps.firstWhere((step) => step.kind == 'functionCall');
+    expect(call.functionParameters, ['midterm', 'final']);
+    expect(call.functionArguments, [75, 80]);
+    expect(call.result, 155);
+    expect(example.steps.last.output, '155\n');
+  });
+
+  test('keeps assignments local to functions', () {
+    final trace = MiniPython().run(
+      'x = 100\n'
+      'def bump(x):\n'
+      '    x = x + 1\n'
+      '    return x\n'
+      'y = bump(4)\n'
+      'print(x, y)',
+    );
+    expect(trace.error, isNull, reason: trace.error);
+    expect(trace.steps.last.variables['x'], 100);
+    expect(trace.steps.last.variables['y'], 5);
+    expect(trace.steps.last.output, '100 5\n');
+  });
+
+  test('supports recursive functions and early return from branches', () {
+    final trace = MiniPython().run(
+      'def factorial(n):\n'
+      '    if n <= 1:\n'
+      '        return 1\n'
+      '    return n * factorial(n - 1)\n'
+      'print(factorial(5))',
+    );
+    expect(trace.error, isNull, reason: trace.error);
+    expect(trace.steps.last.output, '120\n');
+  });
+
+  test('runs finally before returning from a function', () {
+    final trace = MiniPython().run(
+      'def result():\n'
+      '    try:\n'
+      '        return 5\n'
+      '    finally:\n'
+      '        print("cleanup")\n'
+      'print(result())',
+    );
+    expect(trace.error, isNull, reason: trace.error);
+    expect(trace.steps.last.output, 'cleanup\n5\n');
+  });
+
+  test('reports return outside function and wrong argument counts', () {
+    final outside = MiniPython().run('return 5');
+    expect(outside.error, 'return outside function');
+    expect(outside.errorLine, 1);
+
+    final wrongCount = MiniPython().run(
+      'def twice(value):\n'
+      '    return value * 2\n'
+      'print(twice())',
+    );
+    expect(wrongCount.error, contains('1 argument(s) but 0 were given'));
+    expect(wrongCount.errorLine, 3);
+  });
+}

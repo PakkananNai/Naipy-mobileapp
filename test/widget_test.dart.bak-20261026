@@ -1,0 +1,84 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:code_explainer/main.dart';
+import 'package:code_explainer/trace_widgets.dart';
+
+void main() {
+  Future<void> tapVisible(WidgetTester tester, Finder target) async {
+    await tester.ensureVisible(target);
+    await tester.tap(target);
+    await tester.pumpAndSettle();
+  }
+
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
+  testWidgets('previous, next and restart restore historical snapshots',
+      (tester) async {
+    await tester.pumpWidget(const CodeExplainerApp());
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'x = 1\nx = 2\nprint(x)');
+    await tapVisible(tester, find.text('Run & explain'));
+    expect(find.text('1 / 3'), findsOneWidget);
+    expect(find.textContaining('x  =  1'), findsOneWidget);
+
+    await tapVisible(tester, find.byTooltip('Next step'));
+    expect(find.text('2 / 3'), findsOneWidget);
+    expect(find.textContaining('x  =  2'), findsOneWidget);
+
+    await tapVisible(tester, find.byTooltip('Next step'));
+    expect(tester.widget<AnimatedOutput>(find.byType(AnimatedOutput)).output,
+        '2\n');
+    await tapVisible(tester, find.byTooltip('Previous step'));
+    expect(tester.widget<AnimatedOutput>(find.byType(AnimatedOutput)).output,
+        isEmpty);
+
+    await tapVisible(tester, find.byTooltip('Previous step'));
+    expect(find.text('1 / 3'), findsOneWidget);
+    expect(find.textContaining('x  =  1'), findsOneWidget);
+
+    await tapVisible(tester, find.byTooltip('Next step'));
+    await tapVisible(tester, find.byTooltip('Restart'));
+    expect(find.text('1 / 3'), findsOneWidget);
+    expect(find.textContaining('x  =  1'), findsOneWidget);
+  });
+
+  testWidgets('extra keys edit the code field without running the program',
+      (tester) async {
+    await tester.pumpWidget(const CodeExplainerApp());
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'x = 1');
+    final editor = tester.widget<TextField>(find.byType(TextField)).controller!;
+    editor.selection = const TextSelection.collapsed(offset: 0);
+    await tester.tap(find.text('TAB'));
+    await tester.pumpAndSettle();
+    expect(editor.text, '    x = 1');
+    expect(find.textContaining('STEP '), findsNothing);
+  });
+
+  testWidgets(
+      'playback advances, pause cancels future ticks, and completion stops',
+      (tester) async {
+    await tester.pumpWidget(const CodeExplainerApp());
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'a = 1\nb = 2\nc = 3');
+    await tester.tap(find.text('Run & explain'));
+    await tester.pumpAndSettle();
+    final speed = find.byType(DropdownButton<double>);
+    await tester.ensureVisible(speed);
+    await tester.tap(speed);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('2.0×').last);
+    await tester.pumpAndSettle();
+    await tapVisible(tester, find.byTooltip('Play'));
+    await tester.pump(const Duration(milliseconds: 425));
+    expect(find.text('2 / 3'), findsOneWidget);
+    await tapVisible(tester, find.byTooltip('Pause'));
+    await tester.pump(const Duration(seconds: 2));
+    expect(find.text('2 / 3'), findsOneWidget);
+    await tapVisible(tester, find.byTooltip('Play'));
+    await tester.pump(const Duration(milliseconds: 425));
+    expect(find.text('3 / 3'), findsOneWidget);
+    expect(find.byTooltip('Pause'), findsNothing);
+  });
+}

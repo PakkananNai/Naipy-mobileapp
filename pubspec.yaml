@@ -1,0 +1,22 @@
+name: code_explainer
+description: An offline, step-by-step Python learning app.
+publish_to: none
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  file_selector: ^1.1.0
+  flutter:
+    sdk: flutter
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  file_selector_platform_interface: ^2.7.0
+  flutter_lints: ^6.0.0
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

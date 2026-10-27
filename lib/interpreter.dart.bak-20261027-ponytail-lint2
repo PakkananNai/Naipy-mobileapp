@@ -1,0 +1,414 @@
+class TraceStep {
+  const TraceStep(
+      {required this.line,
+      required this.description,
+      required this.variables,
+      required this.output});
+  final int line;
+  final String description;
+  final Map<String, Object?> variables;
+  final String output;
+}
+
+class TraceResult {
+  const TraceResult(this.steps, {this.error, this.errorLine});
+  final List<TraceStep> steps;
+  final String? error;
+  final int? errorLine;
+}
+
+/// Small, offline teaching interpreter. It intentionally accepts expressions and
+/// statements only from the documented subset in README.md.
+class MiniPython {
+  final Map<String, Object?> _vars = {};
+  final List<TraceStep> _steps = [];
+  final StringBuffer _output = StringBuffer();
+  List<String> _lines = [];
+  int _count = 0;
+
+  TraceResult run(String source) {
+    _vars.clear();
+    _steps.clear();
+    _output.clear();
+    _count = 0;
+    _lines = source.replaceAll('\r', '').split('\n');
+    try {
+      _block(0, _lines.length, 0);
+    } on _RunError catch (e) {
+      return TraceResult(List.unmodifiable(_steps),
+          error: e.message, errorLine: e.line);
+    } catch (e) {
+      return TraceResult(List.unmodifiable(_steps), error: e.toString());
+    }
+    return TraceResult(List.unmodifiable(_steps));
+  }
+
+  int _block(int start, int end, int indent) {
+    var i = start;
+    while (i < end) {
+      final raw = _lines[i];
+      if (raw.trim().isEmpty || raw.trimLeft().startsWith('#')) {
+        i++;
+        continue;
+      }
+      final pad = raw.length - raw.trimLeft().length;
+      if (pad < indent) return i;
+      if (pad > indent) throw _RunError('Unexpected indentation', i + 1);
+      final line = raw.trim();
+      if (line == 'else:') throw _RunError('Unexpected else', i + 1);
+      if (line.startsWith('elif ')) {
+        throw _RunError('elif is not supported yet; use if/else', i + 1);
+      }
+      if (++_count > 1000) {
+        throw _RunError('Execution limit reached (1000 steps)', i + 1);
+      }
+      if (line.startsWith('for ') && line.endsWith(':')) {
+        final m =
+            RegExp(r'^for\s+(\w+)\s+in\s+range\((.*)\):$').firstMatch(line);
+        if (m == null) {
+          throw _RunError(
+              'Supported loop syntax: for name in range(...):', i + 1);
+        }
+        final args = _args(m.group(2)!, i + 1)
+            .map((v) => _number(v, i + 1).toInt())
+            .toList();
+        if (args.isEmpty || args.length > 3) {
+          throw _RunError('range() needs one to three arguments', i + 1);
+        }
+        final begin = args.length == 1 ? 0 : args[0],
+            finish = args.length == 1 ? args[0] : args[1],
+            stride = args.length < 3 ? 1 : args[2];
+        if (stride == 0) throw _RunError('range() step cannot be zero', i + 1);
+        final body = _bodyEnd(i + 1, end, indent);
+        var n = begin;
+        while (stride > 0 ? n < finish : n > finish) {
+          _vars[m.group(1)!] = n;
+          _step(i + 1, 'Loop: ${m.group(1)} = $n');
+          _block(i + 1, body, indent + 4);
+          n += stride;
+          if (++_count > 1000) {
+            throw _RunError('Execution limit reached (1000 steps)', i + 1);
+          }
+        }
+        i = body;
+        continue;
+      }
+      if (line.startsWith('if ') && line.endsWith(':')) {
+        final condition =
+            _truth(_eval(line.substring(3, line.length - 1), i + 1));
+        final body = _bodyEnd(i + 1, end, indent);
+        final branchEnd = body < end && _lines[body].trim() == 'else:'
+            ? _bodyEnd(body + 1, end, indent)
+            : body;
+        _step(i + 1, 'Condition is ${condition ? 'True' : 'False'}');
+        if (condition) {
+          _block(i + 1, body, indent + 4);
+        } else if (branchEnd != body) {
+          _block(body + 1, branchEnd, indent + 4);
+        }
+        i = branchEnd;
+        continue;
+      }
+      if (line == 'pass') {
+        _step(i + 1, 'Skip this line');
+        i++;
+        continue;
+      }
+      if (line.startsWith('print(') && line.endsWith(')')) {
+        final values = _args(line.substring(6, line.length - 1), i + 1);
+        _output.writeln(values.map(_format).join(' '));
+        _step(i + 1, 'Print ${values.map(_format).join(' ')}');
+        i++;
+        continue;
+      }
+      final assign = RegExp(r'^(\w+)\s*=\s*(.+)$').firstMatch(line);
+      if (assign != null) {
+        final name = assign.group(1)!;
+        final value = _eval(assign.group(2)!, i + 1);
+        _vars[name] = value;
+        _step(i + 1, 'Set $name = ${_format(value)}');
+        i++;
+        continue;
+      }
+      throw _RunError('Unsupported syntax: $line', i + 1);
+    }
+    return i;
+  }
+
+  int _bodyEnd(int start, int end, int indent) {
+    var i = start;
+    while (i < end) {
+      if (_lines[i].trim().isEmpty || _lines[i].trimLeft().startsWith('#')) {
+        i++;
+        continue;
+      }
+      final pad = _lines[i].length - _lines[i].trimLeft().length;
+      if (pad <= indent) break;
+      i++;
+    }
+    return i;
+  }
+
+  void _step(int line, String description) {
+    _steps.add(TraceStep(
+        line: line,
+        description: description,
+        variables: Map.unmodifiable(_vars),
+        output: _output.toString()));
+  }
+
+  List<Object?> _args(String text, int line) => _split(text, ',')
+      .where((s) => s.trim().isNotEmpty)
+      .map((s) => _eval(s, line))
+      .toList();
+  List<String> _split(String s, String separator) {
+    final out = <String>[];
+    var start = 0, depth = 0;
+    String? quote;
+    for (var i = 0; i < s.length; i++) {
+      final c = s[i];
+      if (quote != null) {
+        if (c == quote && (i == 0 || s[i - 1] != '\\')) quote = null;
+      } else if (c == '"' || c == "'") {
+        quote = c;
+      } else if ('([{'.contains(c)) {
+        depth++;
+      } else if (')]}'.contains(c)) {
+        depth--;
+      } else if (c == separator && depth == 0) {
+        out.add(s.substring(start, i));
+        start = i + 1;
+      }
+    }
+    out.add(s.substring(start));
+    return out;
+  }
+
+  Object? _eval(String text, int line) => _Parser(text, _vars, line).parse();
+  double _number(Object? v, int line) => v is num
+      ? v.toDouble()
+      : throw _RunError('Expected a number, got ${_format(v)}', line);
+  bool _truth(Object? v) => v == null
+      ? false
+      : v is bool
+          ? v
+          : v is num
+              ? v != 0
+              : v is String
+                  ? v.isNotEmpty
+                  : true;
+  String _format(Object? v) => v is String
+      ? v
+      : v is List
+          ? '[${v.map(_format).join(', ')}]'
+          : v is Map
+              ? '{$v}'
+              : '$v';
+}
+
+class _RunError implements Exception {
+  _RunError(this.message, this.line);
+  final String message;
+  final int line;
+}
+
+class _Parser {
+  _Parser(String source, this.vars, this.line) : tokens = _tokenize(source);
+  final Map<String, Object?> vars;
+  final int line;
+  final List<String> tokens;
+  int at = 0;
+  static List<String> _tokenize(String s) => RegExp(
+          r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\d+(?:\.\d+)?|[A-Za-z_]\w*|==|!=|<=|>=|//|\*\*|.)''')
+      .allMatches(s)
+      .map((m) => m.group(0)!)
+      .where((t) => t.trim().isNotEmpty)
+      .toList();
+  Object? parse() {
+    final v = _or();
+    if (at != tokens.length) {
+      throw _RunError('Unexpected token ${tokens[at]}', line);
+    }
+    return v;
+  }
+
+  bool _take(String s) {
+    if (at < tokens.length && tokens[at] == s) {
+      at++;
+      return true;
+    }
+    return false;
+  }
+
+  Object? _or() {
+    var v = _and();
+    while (_take('or')) {
+      final r = _and();
+      v = _truth(v) || _truth(r);
+    }
+    return v;
+  }
+
+  Object? _and() {
+    var v = _compare();
+    while (_take('and')) {
+      final r = _compare();
+      v = _truth(v) && _truth(r);
+    }
+    return v;
+  }
+
+  Object? _compare() {
+    var a = _add();
+    if (at < tokens.length &&
+        ['==', '!=', '<', '>', '<=', '>='].contains(tokens[at])) {
+      final op = tokens[at++], b = _add();
+      final c = a is num && b is num ? a.compareTo(b) : '$a'.compareTo('$b');
+      return switch (op) {
+        '==' => a == b,
+        '!=' => a != b,
+        '<' => c < 0,
+        '>' => c > 0,
+        '<=' => c <= 0,
+        _ => c >= 0
+      };
+    }
+    return a;
+  }
+
+  Object? _add() {
+    var a = _mul();
+    while (at < tokens.length && ['+', '-'].contains(tokens[at])) {
+      final op = tokens[at++], b = _mul();
+      if (op == '+') {
+        if (a is String && b is String) {
+          a = '$a$b';
+        } else if (a is num && b is num) {
+          a = a + b;
+        } else {
+          throw _RunError('Cannot add these value types', line);
+        }
+      } else {
+        a = (a as num) - (b as num);
+      }
+    }
+    return a;
+  }
+
+  Object? _mul() {
+    var a = _unary();
+    while (at < tokens.length && ['*', '/', '//', '%'].contains(tokens[at])) {
+      final op = tokens[at++], b = _unary();
+      if (b is num && b == 0 && op != '*') {
+        throw _RunError('Division by zero', line);
+      }
+      a = switch (op) {
+        '*' => a is String
+            ? List.filled((b as int).clamp(0, 1000).toInt(), a).join()
+            : (a as num) * (b as num),
+        '/' => (a as num) / (b as num),
+        '//' => ((a as num) / (b as num)).floor(),
+        _ => (a as num) % (b as num)
+      };
+    }
+    return a;
+  }
+
+  Object? _unary() {
+    if (_take('-')) return -((_unary()) as num);
+    if (_take('not')) return !_truth(_unary());
+    return _atom();
+  }
+
+  Object? _atom() {
+    if (_take('(')) {
+      final v = _or();
+      if (!_take(')')) throw _RunError('Expected )', line);
+      return v;
+    }
+    if (_take('[')) {
+      final xs = <Object?>[];
+      while (at < tokens.length && !_take(']')) {
+        xs.add(_or());
+        if (!_take(',')) {
+          if (!_take(']')) throw _RunError('Expected ]', line);
+          break;
+        }
+      }
+      return xs;
+    }
+    if (at >= tokens.length) throw _RunError('Expected a value', line);
+    final t = tokens[at++];
+    if ((t.startsWith('"') && t.endsWith('"')) ||
+        (t.startsWith("'") && t.endsWith("'")))
+      return t
+          .substring(1, t.length - 1)
+          .replaceAll(r'\n', '\n')
+          .replaceAll(r'\t', '\t');
+    if (num.tryParse(t) != null) return num.parse(t);
+    if (t == 'True') return true;
+    if (t == 'False') return false;
+    if (t == 'None') return null;
+    if (_take('(')) {
+      final args = <Object?>[];
+      while (at < tokens.length && !_take(')')) {
+        args.add(_or());
+        if (!_take(',') && !_take(')')) {
+          throw _RunError('Expected , or )', line);
+        }
+        if (at > 0 && tokens[at - 1] == ')') break;
+      }
+      return _call(t, args);
+    }
+    if (!vars.containsKey(t)) throw _RunError("Name '$t' is not defined", line);
+    var v = vars[t];
+    while (_take('[')) {
+      final ix = _or();
+      if (!_take(']')) throw _RunError('Expected ]', line);
+      if (v is List) {
+        v = v[ix as int];
+      } else if (v is String) {
+        v = v[ix as int];
+      } else {
+        throw _RunError('Value cannot be indexed', line);
+      }
+    }
+    return v;
+  }
+
+  Object? _call(String name, List<Object?> a) => switch (name) {
+        'len' => (a.first as dynamic).length,
+        'sum' => (a.first as List).fold<num>(0, (s, x) => s + (x as num)),
+        'min' => (a.first as List)
+            .reduce((x, y) => (x as Comparable).compareTo(y) <= 0 ? x : y),
+        'max' => (a.first as List)
+            .reduce((x, y) => (x as Comparable).compareTo(y) >= 0 ? x : y),
+        'abs' => (a.first as num).abs(),
+        'round' => (a.first as num).round(),
+        'int' => int.parse('${a.first}'),
+        'float' => double.parse('${a.first}'),
+        'str' => '${a.first}',
+        'bool' =>
+          a.first != null && a.first != false && a.first != 0 && a.first != '',
+        _ => throw _RunError('Unsupported function $name()', line)
+      };
+  bool _truth(Object? v) => v == null
+      ? false
+      : v is bool
+          ? v
+          : v is num
+              ? v != 0
+              : v is String
+                  ? v.isNotEmpty
+                  : true;
+}
+
+void main() {
+  final trace = MiniPython().run('x = 10\ny = 20\ntotal = x + y\nprint(total)');
+  assert(trace.error == null && trace.steps.length == 4);
+  assert(trace.steps[2].variables['total'] == 30 &&
+      trace.steps[3].output.trim() == '30');
+  final loop =
+      MiniPython().run('total = 0\nfor i in range(3):\n    total = total + i');
+  assert(loop.error == null && loop.steps.last.variables['total'] == 3);
+}
