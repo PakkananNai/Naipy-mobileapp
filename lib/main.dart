@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +11,7 @@ import 'editor_keys.dart';
 import 'editor_theme.dart';
 import 'interpreter.dart';
 import 'method_explorer.dart';
+import 'platform_api.dart' as platform;
 import 'trace_widgets.dart';
 
 void main() => runApp(const CodeExplainerApp());
@@ -185,14 +186,6 @@ const _githubReleasesUrl =
     'https://github.com/PakkananNai/Naipy-mobileapp/releases';
 const _platformChannel = MethodChannel('com.pakkanannai.naipy/platform');
 
-Future<void> _openExternalUrl(String url) async {
-  if (Platform.isAndroid) {
-    await _platformChannel.invokeMethod<bool>('openUrl', {'url': url});
-  } else if (Platform.isLinux) {
-    await Process.start('xdg-open', [url], mode: ProcessStartMode.detached);
-  }
-}
-
 Future<void> _checkForUpdates(BuildContext context, bool thai) async {
   String t(String en, String th) => thai ? th : en;
   showDialog<void>(
@@ -202,25 +195,11 @@ Future<void> _checkForUpdates(BuildContext context, bool thai) async {
   );
   Map<String, dynamic>? release;
   Object? failure;
-  final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
   try {
-    final request = await client.getUrl(Uri.parse(_githubLatestReleaseApi));
-    request.headers
-        .set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
-    request.headers.set(HttpHeaders.userAgentHeader, 'Naipy-Code-Explainer');
-    final response = await request.close();
-    if (response.statusCode != HttpStatus.ok) {
-      throw HttpException('GitHub returned HTTP ${response.statusCode}');
-    }
-    final payload = jsonDecode(await response.transform(utf8.decoder).join());
-    if (payload is! Map<String, dynamic>) {
-      throw const FormatException('Unexpected release response');
-    }
-    release = payload;
+    release = await platform.fetchLatestRelease(_githubLatestReleaseApi);
   } catch (error) {
     failure = error;
   } finally {
-    client.close(force: true);
     if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
   }
   if (!context.mounted) return;
@@ -231,7 +210,7 @@ Future<void> _checkForUpdates(BuildContext context, bool thai) async {
       failure == null && _compareVersions(latestVersion, _appVersion) > 0;
   final assets = release?['assets'];
   String releaseUrl = release?['html_url']?.toString() ?? _githubReleasesUrl;
-  if (Platform.isAndroid && assets is List) {
+  if (platform.isAndroid && assets is List) {
     for (final asset in assets) {
       if (asset is Map &&
           asset['name']?.toString().toLowerCase().endsWith('.apk') == true) {
@@ -267,7 +246,7 @@ Future<void> _checkForUpdates(BuildContext context, bool thai) async {
             onPressed: () async {
               Navigator.pop(dialogContext);
               try {
-                await _openExternalUrl(releaseUrl);
+                await platform.openExternalUrl(releaseUrl);
               } catch (_) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
@@ -351,7 +330,7 @@ class _CodeInputPageState extends State<_CodeInputPage> {
   bool _openingResult = false;
   bool _fileBusy = false;
   String? _filePath;
-  String? _androidSavedName;
+  String? _savedFileName;
   String _savedText = _examples.values.first;
 
   String t(String en, String th) => widget.thai ? th : en;
@@ -362,7 +341,7 @@ class _CodeInputPageState extends State<_CodeInputPage> {
   );
 
   String get _fileName =>
-      _androidSavedName ??
+      _savedFileName ??
       _filePath?.split(RegExp(r'[/\\\\]')).last ??
       t('Untitled.py', 'ยังไม่บันทึก.py');
 
@@ -425,8 +404,8 @@ class _CodeInputPageState extends State<_CodeInputPage> {
       _savedText = content;
       controller.text = content;
       setState(() {
-        _filePath = file.path.isEmpty ? null : file.path;
-        _androidSavedName = null;
+        _filePath = kIsWeb || file.path.isEmpty ? null : file.path;
+        _savedFileName = file.name;
       });
       editorFocus.unfocus();
       _message(t('Opened $_fileName', 'เปิด $_fileName แล้ว'));
@@ -437,12 +416,51 @@ class _CodeInputPageState extends State<_CodeInputPage> {
     }
   }
 
+  Future<String?> _promptWebFileName() async {
+    final nameController = TextEditingController(
+      text: _fileName == t('Untitled.py', 'ยังไม่บันทึก.py')
+          ? 'untitled.py'
+          : _fileName,
+    );
+    try {
+      return await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(t('Download Python file', 'ดาวน์โหลดไฟล์ Python')),
+          content: TextField(
+            controller: nameController,
+            autofocus: true,
+            decoration: InputDecoration(
+              labelText: t('File name', 'ชื่อไฟล์'),
+              helperText: t('The .py extension is added if missing',
+                  'ระบบจะเติมนามสกุล .py ให้อัตโนมัติ'),
+            ),
+            onSubmitted: (value) => Navigator.pop(dialogContext, value),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: Text(t('Cancel', 'ยกเลิก')),
+            ),
+            FilledButton(
+              onPressed: () =>
+                  Navigator.pop(dialogContext, nameController.text),
+              child: Text(t('Download', 'ดาวน์โหลด')),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      nameController.dispose();
+    }
+  }
+
   Future<bool> _saveFile({bool saveAs = false}) async {
     if (_fileBusy) return false;
     setState(() => _fileBusy = true);
     try {
       final bytes = Uint8List.fromList(utf8.encode(controller.text));
-      if (Platform.isAndroid) {
+      if (platform.isAndroid) {
         final currentPath = saveAs ? null : _filePath;
         String? savedUri;
         String savedName = _fileName;
@@ -473,7 +491,29 @@ class _CodeInputPageState extends State<_CodeInputPage> {
         _savedText = controller.text;
         setState(() {
           _filePath = savedUri;
-          _androidSavedName = savedName;
+          _savedFileName = savedName;
+        });
+      } else if (kIsWeb) {
+        var savedName = saveAs ? null : _savedFileName;
+        savedName ??= await _promptWebFileName();
+        if (savedName == null) return false;
+        savedName = savedName.trim().split(RegExp(r'[/\\\\]')).last;
+        if (savedName.isEmpty) {
+          return false;
+        }
+        if (!savedName.toLowerCase().endsWith('.py'))
+          savedName = '$savedName.py';
+        final file = XFile.fromData(
+          bytes,
+          mimeType: 'text/x-python',
+          name: savedName,
+        );
+        await file.saveTo(savedName);
+        if (!mounted) return false;
+        _savedText = controller.text;
+        setState(() {
+          _filePath = null;
+          _savedFileName = savedName;
         });
       } else {
         var path = saveAs ? null : _filePath;
@@ -496,7 +536,7 @@ class _CodeInputPageState extends State<_CodeInputPage> {
         _savedText = controller.text;
         setState(() {
           _filePath = path;
-          _androidSavedName = null;
+          _savedFileName = null;
         });
       }
       _message(t('Saved $_fileName', 'บันทึก $_fileName แล้ว'));
