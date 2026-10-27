@@ -124,6 +124,148 @@ class _MethodExplorerPageState extends State<MethodExplorerPage> {
       'result': "['hello', 'world']"
     },
     {
+      'name': 'print()',
+      'category': 'Basics',
+      'syntax': 'print(value, ..., sep=\' \', end=\'\n\')',
+      'th':
+          'แสดงข้อมูลออกทางหน้าจอ รับค่าได้หลายค่า ใช้ sep กำหนดตัวคั่น และ end กำหนดข้อความท้ายบรรทัด (ปกติขึ้นบรรทัดใหม่)',
+      'en':
+          'Displays values. Use sep to choose the separator and end to choose what comes after the output (newline by default).',
+      'code':
+          'name = \'Nai\'\nprint(\'Hello\', name)\nprint(\'A\', \'B\', sep=\'-\', end=\'!\')',
+      'result': 'Hello Nai\nA-B!'
+    },
+    {
+      'name': 'input()',
+      'category': 'Basics',
+      'syntax': 'input(prompt)',
+      'th':
+          'แสดงข้อความถามผู้ใช้ แล้วรับข้อมูลที่พิมพ์เข้ามาเป็นข้อความชนิด str เสมอ ถ้าต้องการตัวเลขให้แปลงด้วย int() หรือ float()',
+      'en':
+          'Shows a prompt and reads user input as a string. Convert it with int() or float() when you need a number.',
+      'code': 'name = input(\'Name: \')\nprint(\'Hi\', name)',
+      'result': 'If input is Nai → Hi Nai'
+    },
+    {
+      'name': 'int()',
+      'category': 'Types',
+      'syntax': 'int(value)',
+      'th':
+          'แปลงค่าเป็นจำนวนเต็ม เช่น int(\'12\') ได้ 12 และ int(3.9) ได้ 3 (ตัดเศษทศนิยมเข้าหาศูนย์) ข้อความที่ไม่ใช่ตัวเลขจะทำให้เกิด ValueError',
+      'en':
+          'Converts a value to an integer. int(3.9) becomes 3 by truncating toward zero; invalid numeric text raises ValueError.',
+      'code': 'age = int(\'18\')\nprint(age + 2)',
+      'result': '20'
+    },
+    {
+      'name': 'float()',
+      'category': 'Types',
+      'syntax': 'float(value)',
+      'th':
+          'แปลงค่าเป็นตัวเลขที่มีทศนิยม เช่น float(\'3.5\') ได้ 3.5 ใช้รับค่าจาก input เมื่อต้องการคำนวณทศนิยม',
+      'en':
+          'Converts a value to a floating-point number, useful for decimal input.',
+      'code': 'price = float(\'12.5\')\nprint(price * 2)',
+      'result': '25.0'
+    },
+    {
+      'name': 'str()',
+      'category': 'Types',
+      'syntax': 'str(value)',
+      'th':
+          'แปลงค่าเป็นข้อความ เช่น str(42) ได้ \'42\' ใช้ต่อข้อความกับตัวเลขได้หลังแปลงแล้ว',
+      'en': 'Converts a value to a string, such as str(42) becoming \'42\'.',
+      'code': 'score = 42\nmessage = \'Score: \' + str(score)\nprint(message)',
+      'result': 'Score: 42'
+    },
+    {
+      'name': 'bool()',
+      'category': 'Types',
+      'syntax': 'bool(value)',
+      'th':
+          'แปลงค่าเป็น True หรือ False โดยค่าที่ว่างหรือเป็นศูนย์ เช่น 0, \'\', [], None จะเป็น False ส่วนค่าทั่วไปที่ไม่ว่างจะเป็น True',
+      'en':
+          'Converts a value to True or False. Empty values and zero are False; most non-empty values are True.',
+      'code': 'print(bool(0))\nprint(bool(\'hello\'))\nprint(bool([]))',
+      'result': 'False\nTrue\nFalse'
+    },
+    {
+      'name': 'and',
+      'category': 'Operators',
+      'syntax': 'condition_a and condition_b',
+      'th':
+          'เป็นจริงเมื่อทั้งสองเงื่อนไขเป็นจริง ใช้ตรวจหลายเงื่อนไขพร้อมกัน และจะหยุดตรวจเมื่อรู้ผลได้แล้ว',
+      'en':
+          'True when both conditions are true. It short-circuits once the result is known.',
+      'code': 'age = 20\nhas_id = True\nprint(age >= 18 and has_id)',
+      'result': 'True'
+    },
+    {
+      'name': 'or',
+      'category': 'Operators',
+      'syntax': 'condition_a or condition_b',
+      'th':
+          'เป็นจริงเมื่อมีอย่างน้อยหนึ่งเงื่อนไขเป็นจริง ถ้าด้านซ้ายเป็นจริงอยู่แล้วจะไม่จำเป็นต้องตรวจด้านขวา',
+      'en':
+          'True when at least one condition is true. It short-circuits when the left side is already true.',
+      'code':
+          'is_weekend = False\nis_holiday = True\nprint(is_weekend or is_holiday)',
+      'result': 'True'
+    },
+    {
+      'name': 'not',
+      'category': 'Operators',
+      'syntax': 'not condition',
+      'th': 'กลับค่าความจริง True เป็น False และ False เป็น True',
+      'en': 'Negates a truth value: True becomes False and False becomes True.',
+      'code': 'logged_in = False\nprint(not logged_in)',
+      'result': 'True'
+    },
+    {
+      'name': 'Arithmetic operators',
+      'category': 'Operators',
+      'syntax': '+  -  *  /  //  %  **',
+      'th':
+          'ตัวดำเนินการคำนวณ: + บวก, - ลบ, * คูณ, / หาร, // หารปัดลง, % เศษจากการหาร และ ** ยกกำลัง',
+      'en':
+          'Arithmetic operators: add, subtract, multiply, divide, floor-divide, modulo (remainder), and exponentiation.',
+      'code': 'print(7 / 2)\nprint(7 // 2)\nprint(7 % 2)\nprint(2 ** 3)',
+      'result': '3.5\n3\n1\n8'
+    },
+    {
+      'name': 'Comparison operators',
+      'category': 'Operators',
+      'syntax': '==  !=  >  <  >=  <=',
+      'th':
+          'ใช้เปรียบเทียบค่าแล้วได้ True หรือ False: เท่ากับ, ไม่เท่ากับ, มากกว่า, น้อยกว่า, มากกว่าหรือเท่ากับ และน้อยกว่าหรือเท่ากับ',
+      'en':
+          'Compare values and return True or False: equal, not equal, greater, less, greater-or-equal, less-or-equal.',
+      'code': 'score = 75\nprint(score >= 60)\nprint(score == 100)',
+      'result': 'True\nFalse'
+    },
+    {
+      'name': 'Assignment operators',
+      'category': 'Operators',
+      'syntax': '=  +=  -=  *=  /=',
+      'th':
+          '= กำหนดค่าให้ตัวแปร ส่วน +=, -=, *= และ /= คำนวณแล้วเก็บค่ากลับในตัวแปรเดิม',
+      'en':
+          '= assigns a value. +=, -=, *=, and /= update a variable using an operation.',
+      'code': 'count = 2\ncount += 3\ncount *= 2\nprint(count)',
+      'result': '10'
+    },
+    {
+      'name': 'f-string formatting',
+      'category': 'Formatting',
+      'syntax': 'f\'Hello {name}\'  ·  f\'{price:.2f}\'',
+      'th':
+          'ใส่ f ไว้หน้าข้อความ แล้วเขียนชื่อตัวแปรหรือนิพจน์ใน { } เพื่อแสดงค่าได้โดยตรง เช่น :.2f แสดงทศนิยม 2 ตำแหน่ง',
+      'en':
+          'Prefix a string with f and place variables or expressions in braces. For example, :.2f formats two decimal places.',
+      'code': 'name = \'Nai\'\nprice = 12.5\nprint(f\'{name}: {price:.2f}\')',
+      'result': 'Nai: 12.50'
+    },
+    {
       'name': 'len()',
       'category': 'Built-in',
       'syntax': 'len(value)',
@@ -364,6 +506,9 @@ class _MethodExplorerPageState extends State<MethodExplorerPage> {
     final thai = widget.thai;
     final categories = [
       'All',
+      'Basics',
+      'Types',
+      'Operators',
       'List',
       'String',
       'Built-in',

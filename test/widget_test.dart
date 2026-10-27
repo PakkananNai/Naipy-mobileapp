@@ -176,7 +176,8 @@ void main() {
 
     await tester.pumpWidget(const CodeExplainerApp());
     await tester.pumpAndSettle();
-    await tapVisible(tester, find.byTooltip('Open Python file'));
+    await tapVisible(tester, find.byTooltip('Files'));
+    await tapVisible(tester, find.text('Open file'));
 
     final editor = tester.widget<TextField>(find.byType(TextField)).controller!;
     expect(editor.text, openedSource);
@@ -187,7 +188,8 @@ void main() {
     await tester.pumpAndSettle();
     expect(editor.text, editedSource);
     expect(find.text('Unsaved'), findsOneWidget);
-    await tapVisible(tester, find.byTooltip('Save As'));
+    await tapVisible(tester, find.byTooltip('Files'));
+    await tapVisible(tester, find.text('Save as'));
     await tester.runAsync(
         () => Future<void>.delayed(const Duration(milliseconds: 100)));
     await tester.pumpAndSettle();

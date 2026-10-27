@@ -1,9 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'editor_keys.dart';
@@ -65,7 +66,7 @@ class _AppState extends State<CodeExplainerApp> {
   @override
   Widget build(BuildContext context) => MaterialApp(
         debugShowCheckedModeBanner: false,
-        title: 'Code Explainer',
+        title: 'Naipy',
         themeMode: mode,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(
@@ -84,12 +85,225 @@ class _AppState extends State<CodeExplainerApp> {
         ),
         home: _CodeInputPage(
           onTheme: _toggleTheme,
+          darkMode: mode == ThemeMode.dark,
           thai: thai,
           onLanguage: _toggleLanguage,
           editorTheme: editorTheme,
           onEditorTheme: _setEditorTheme,
         ),
       );
+}
+
+class _SettingsPage extends StatelessWidget {
+  const _SettingsPage({
+    required this.thai,
+    required this.darkMode,
+    required this.editorTheme,
+    required this.onTheme,
+    required this.onLanguage,
+    required this.onEditorTheme,
+  });
+
+  final bool thai;
+  final bool darkMode;
+  final String editorTheme;
+  final VoidCallback onTheme;
+  final VoidCallback onLanguage;
+  final ValueChanged<String> onEditorTheme;
+
+  String t(String en, String th) => thai ? th : en;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: Text(t('Settings', 'ตั้งค่า'))),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          ListTile(
+            leading: const Icon(Icons.contrast_rounded),
+            title: Text(t('App appearance', 'ธีมแอป')),
+            subtitle: Text(darkMode ? t('Dark', 'มืด') : t('Light', 'สว่าง')),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: onTheme,
+          ),
+          ListTile(
+            leading: const Icon(Icons.translate),
+            title: Text(t('Language', 'ภาษา')),
+            subtitle: Text(thai ? 'ไทย' : 'English'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: onLanguage,
+          ),
+          ListTile(
+            leading: const Icon(Icons.palette_outlined),
+            title: Text(t('Code editor theme', 'ธีมหน้าต่างเขียนโค้ด')),
+            subtitle: DropdownButton<String>(
+              value: editorTheme,
+              isExpanded: true,
+              items: EditorThemePalette.all
+                  .map(
+                      (p) => DropdownMenuItem(value: p.id, child: Text(p.name)))
+                  .toList(),
+              onChanged: (id) {
+                if (id != null) onEditorTheme(id);
+              },
+            ),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.system_update_alt),
+            title: Text(t('Check for updates', 'ตรวจสอบการอัปเดต')),
+            subtitle: Text(t(
+              'Current version v$_appVersion · Check GitHub Releases',
+              'เวอร์ชันปัจจุบัน v$_appVersion · ตรวจสอบจาก GitHub',
+            )),
+            onTap: () => _checkForUpdates(context, thai),
+          ),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: Text(t('About Code Explainer', 'เกี่ยวกับ Code Explainer')),
+            subtitle: Text(t('Offline Python learning tool',
+                'เครื่องมือเรียนรู้ Python แบบออฟไลน์')),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            t('Theme and language preferences are saved automatically.',
+                'ระบบบันทึกธีมและภาษาให้อัตโนมัติ'),
+            style: TextStyle(color: colors.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+const _appVersion = '1.0.0';
+const _githubLatestReleaseApi =
+    'https://api.github.com/repos/PakkananNai/Naipy-mobileapp/releases/latest';
+const _githubReleasesUrl =
+    'https://github.com/PakkananNai/Naipy-mobileapp/releases';
+const _platformChannel = MethodChannel('com.pakkanannai.naipy/platform');
+
+Future<void> _openExternalUrl(String url) async {
+  if (Platform.isAndroid) {
+    await _platformChannel.invokeMethod<bool>('openUrl', {'url': url});
+  } else if (Platform.isLinux) {
+    await Process.start('xdg-open', [url], mode: ProcessStartMode.detached);
+  }
+}
+
+Future<void> _checkForUpdates(BuildContext context, bool thai) async {
+  String t(String en, String th) => thai ? th : en;
+  showDialog<void>(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => const Center(child: CircularProgressIndicator()),
+  );
+  Map<String, dynamic>? release;
+  Object? failure;
+  final client = HttpClient()..connectionTimeout = const Duration(seconds: 10);
+  try {
+    final request = await client.getUrl(Uri.parse(_githubLatestReleaseApi));
+    request.headers
+        .set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
+    request.headers.set(HttpHeaders.userAgentHeader, 'Naipy-Code-Explainer');
+    final response = await request.close();
+    if (response.statusCode != HttpStatus.ok) {
+      throw HttpException('GitHub returned HTTP ${response.statusCode}');
+    }
+    final payload = jsonDecode(await response.transform(utf8.decoder).join());
+    if (payload is! Map<String, dynamic>) {
+      throw const FormatException('Unexpected release response');
+    }
+    release = payload;
+  } catch (error) {
+    failure = error;
+  } finally {
+    client.close(force: true);
+    if (context.mounted) Navigator.of(context, rootNavigator: true).pop();
+  }
+  if (!context.mounted) return;
+
+  final tag = release?['tag_name']?.toString() ?? '';
+  final latestVersion = tag.replaceFirst(RegExp(r'^[vV]'), '');
+  final isNewer =
+      failure == null && _compareVersions(latestVersion, _appVersion) > 0;
+  final assets = release?['assets'];
+  String releaseUrl = release?['html_url']?.toString() ?? _githubReleasesUrl;
+  if (Platform.isAndroid && assets is List) {
+    for (final asset in assets) {
+      if (asset is Map &&
+          asset['name']?.toString().toLowerCase().endsWith('.apk') == true) {
+        releaseUrl = asset['browser_download_url']?.toString() ?? releaseUrl;
+        break;
+      }
+    }
+  }
+  final notes = release?['body']?.toString().trim() ?? '';
+  await showDialog<void>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text(failure != null
+          ? t('Update check failed', 'ตรวจสอบอัปเดตไม่สำเร็จ')
+          : isNewer
+              ? t('Update available', 'มีเวอร์ชันใหม่')
+              : t('You are up to date', 'คุณใช้เวอร์ชันล่าสุดแล้ว')),
+      content: SingleChildScrollView(
+        child: Text(failure != null
+            ? t('Could not reach GitHub. Check your internet connection and try again.',
+                'เชื่อมต่อ GitHub ไม่ได้ ตรวจสอบอินเทอร์เน็ตแล้วลองอีกครั้ง')
+            : '${t('Current version', 'เวอร์ชันปัจจุบัน')}: v$_appVersion\n'
+                '${t('Latest version', 'เวอร์ชันล่าสุด')}: $tag'
+                '${notes.isEmpty ? '' : '\n\n$notes'}'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext),
+          child: Text(t('Close', 'ปิด')),
+        ),
+        if (failure == null && isNewer)
+          FilledButton.icon(
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              try {
+                await _openExternalUrl(releaseUrl);
+              } catch (_) {
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                    content: Text(t('Could not open the download page.',
+                        'เปิดหน้าดาวน์โหลดไม่สำเร็จ')),
+                  ));
+                }
+              }
+            },
+            icon: const Icon(Icons.download),
+            label: Text(t('Download update', 'ดาวน์โหลดอัปเดต')),
+          ),
+      ],
+    ),
+  );
+}
+
+int _compareVersions(String a, String b) {
+  List<int> parts(String version) => version
+      .split('+')
+      .first
+      .split('-')
+      .first
+      .split('.')
+      .map((part) => int.tryParse(part) ?? 0)
+      .toList();
+  final left = parts(a);
+  final right = parts(b);
+  for (var i = 0;
+      i < (left.length > right.length ? left.length : right.length);
+      i++) {
+    final x = i < left.length ? left[i] : 0;
+    final y = i < right.length ? right[i] : 0;
+    if (x != y) return x.compareTo(y);
+  }
+  return 0;
 }
 
 const _examples = <String, String>{
@@ -105,6 +319,7 @@ const _examples = <String, String>{
 class _CodeInputPage extends StatefulWidget {
   const _CodeInputPage({
     required this.onTheme,
+    required this.darkMode,
     required this.thai,
     required this.onLanguage,
     required this.editorTheme,
@@ -112,6 +327,7 @@ class _CodeInputPage extends StatefulWidget {
   });
 
   final VoidCallback onTheme;
+  final bool darkMode;
   final VoidCallback onLanguage;
   final bool thai;
   final String editorTheme;
@@ -135,6 +351,7 @@ class _CodeInputPageState extends State<_CodeInputPage> {
   bool _openingResult = false;
   bool _fileBusy = false;
   String? _filePath;
+  String? _androidSavedName;
   String _savedText = _examples.values.first;
 
   String t(String en, String th) => widget.thai ? th : en;
@@ -145,6 +362,7 @@ class _CodeInputPageState extends State<_CodeInputPage> {
   );
 
   String get _fileName =>
+      _androidSavedName ??
       _filePath?.split(RegExp(r'[/\\\\]')).last ??
       t('Untitled.py', 'ยังไม่บันทึก.py');
 
@@ -208,6 +426,7 @@ class _CodeInputPageState extends State<_CodeInputPage> {
       controller.text = content;
       setState(() {
         _filePath = file.path.isEmpty ? null : file.path;
+        _androidSavedName = null;
       });
       editorFocus.unfocus();
       _message(t('Opened $_fileName', 'เปิด $_fileName แล้ว'));
@@ -222,30 +441,64 @@ class _CodeInputPageState extends State<_CodeInputPage> {
     if (_fileBusy) return false;
     setState(() => _fileBusy = true);
     try {
-      var path = saveAs ? null : _filePath;
-      if (path == null || path.isEmpty) {
-        final location = await getSaveLocation(
-          acceptedTypeGroups: [_pythonType],
-          suggestedName: _fileName == t('Untitled.py', 'ยังไม่บันทึก.py')
-              ? 'untitled.py'
-              : _fileName,
-        );
-        if (location == null) return false;
-        path = location.path;
-        if (!path.toLowerCase().endsWith('.py')) path = '$path.py';
+      final bytes = Uint8List.fromList(utf8.encode(controller.text));
+      if (Platform.isAndroid) {
+        final currentPath = saveAs ? null : _filePath;
+        String? savedUri;
+        String savedName = _fileName;
+        if (currentPath != null && currentPath.startsWith('content://')) {
+          await _platformChannel.invokeMethod<String>('writeDocument', {
+            'uri': currentPath,
+            'bytes': bytes,
+          });
+          savedUri = currentPath;
+        } else {
+          if (savedName == t('Untitled.py', 'ยังไม่บันทึก.py')) {
+            savedName = 'untitled.py';
+          }
+          final result =
+              await _platformChannel.invokeMethod<String>('saveDocument', {
+            'name': savedName.toLowerCase().endsWith('.py')
+                ? savedName
+                : '$savedName.py',
+            'bytes': bytes,
+          });
+          if (result == null) return false;
+          savedUri = result;
+          if (!savedName.toLowerCase().endsWith('.py')) {
+            savedName = '$savedName.py';
+          }
+        }
+        if (!mounted) return false;
+        _savedText = controller.text;
+        setState(() {
+          _filePath = savedUri;
+          _androidSavedName = savedName;
+        });
+      } else {
+        var path = saveAs ? null : _filePath;
+        if (path == null || path.isEmpty) {
+          final location = await getSaveLocation(
+            acceptedTypeGroups: [_pythonType],
+            suggestedName: _fileName == t('Untitled.py', 'ยังไม่บันทึก.py')
+                ? 'untitled.py'
+                : _fileName,
+          );
+          if (location == null) return false;
+          path = location.path;
+          if (!path.toLowerCase().endsWith('.py')) path = '$path.py';
+        }
+        final name = path.split(RegExp(r'[/\\\\]')).last;
+        final file =
+            XFile.fromData(bytes, mimeType: 'text/x-python', name: name);
+        await file.saveTo(path);
+        if (!mounted) return false;
+        _savedText = controller.text;
+        setState(() {
+          _filePath = path;
+          _androidSavedName = null;
+        });
       }
-      final name = path.split(RegExp(r'[/\\\\]')).last;
-      final file = XFile.fromData(
-        Uint8List.fromList(utf8.encode(controller.text)),
-        mimeType: 'text/x-python',
-        name: name,
-      );
-      await file.saveTo(path);
-      if (!mounted) return false;
-      _savedText = controller.text;
-      setState(() {
-        _filePath = path;
-      });
       _message(t('Saved $_fileName', 'บันทึก $_fileName แล้ว'));
       return true;
     } catch (error) {
@@ -321,7 +574,34 @@ class _CodeInputPageState extends State<_CodeInputPage> {
     final colors = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Code Explainer'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Naipy',
+              style:
+                  TextStyle(fontWeight: FontWeight.w700, letterSpacing: -0.4),
+            ),
+            const SizedBox(width: 5),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 3),
+              decoration: BoxDecoration(
+                border:
+                    Border.all(color: colors.outline.withValues(alpha: 0.65)),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Text(
+                'CODE EXPLAINER',
+                style: TextStyle(
+                  fontSize: 8,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.35,
+                  color: colors.onSurfaceVariant,
+                ),
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
             tooltip: t('Method Explorer', 'คลัง Method'),
@@ -333,13 +613,18 @@ class _CodeInputPageState extends State<_CodeInputPage> {
             ),
           ),
           IconButton(
-            tooltip: t('Switch theme', 'เปลี่ยนธีม'),
-            onPressed: widget.onTheme,
-            icon: const Icon(Icons.contrast_rounded),
-          ),
-          TextButton(
-            onPressed: widget.onLanguage,
-            child: Text(widget.thai ? 'EN' : 'TH'),
+            tooltip: t('Settings', 'ตั้งค่า'),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => _SettingsPage(
+                thai: widget.thai,
+                darkMode: widget.darkMode,
+                editorTheme: widget.editorTheme,
+                onTheme: widget.onTheme,
+                onLanguage: widget.onLanguage,
+                onEditorTheme: widget.onEditorTheme,
+              ),
+            )),
+            icon: const Icon(Icons.settings_outlined),
           ),
           const SizedBox(width: 6),
         ],
@@ -416,28 +701,41 @@ class _CodeInputPageState extends State<_CodeInputPage> {
                     spacing: 8,
                     runSpacing: 4,
                     children: [
-                      IconButton(
-                        tooltip: t('Open Python file', 'เปิดไฟล์ Python'),
-                        onPressed: _fileBusy ? null : _openFile,
+                      PopupMenuButton<String>(
+                        tooltip: t('Files', 'ไฟล์'),
                         icon: const Icon(Icons.folder_open_outlined),
-                      ),
-                      IconButton(
-                        tooltip: t('Save', 'บันทึก'),
-                        onPressed: _fileBusy
-                            ? null
-                            : () {
-                                _saveFile();
-                              },
-                        icon: const Icon(Icons.save_outlined),
-                      ),
-                      IconButton(
-                        tooltip: t('Save As', 'บันทึกเป็น'),
-                        onPressed: _fileBusy
-                            ? null
-                            : () {
-                                _saveFile(saveAs: true);
-                              },
-                        icon: const Icon(Icons.save_as_outlined),
+                        enabled: !_fileBusy,
+                        onSelected: (action) {
+                          if (action == 'open') _openFile();
+                          if (action == 'save') _saveFile();
+                          if (action == 'saveAs') _saveFile(saveAs: true);
+                        },
+                        itemBuilder: (context) => [
+                          PopupMenuItem(
+                            value: 'open',
+                            child: ListTile(
+                              leading: const Icon(Icons.folder_open),
+                              title: Text(t('Open file', 'เปิดไฟล์')),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'save',
+                            child: ListTile(
+                              leading: const Icon(Icons.save_outlined),
+                              title: Text(t('Save', 'บันทึก')),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                          PopupMenuItem(
+                            value: 'saveAs',
+                            child: ListTile(
+                              leading: const Icon(Icons.save_as_outlined),
+                              title: Text(t('Save as', 'บันทึกเป็น')),
+                              contentPadding: EdgeInsets.zero,
+                            ),
+                          ),
+                        ],
                       ),
                       DropdownButtonHideUnderline(
                         child: DropdownButton<String>(
